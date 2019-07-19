@@ -1,0 +1,118 @@
+#!/usr/bin/python
+
+# Copyright(C) 2019, ATA Engineering, Inc.
+#
+# This program is free software you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 3 of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with this program; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+
+# This script mirrors a binary put file from Loci/CHEM about the x = 0, y = 0,
+# or z = 0 plane
+
+import h5py
+import argparse
+
+def MirrorScalar(fin, fout, name):
+    var = fin.get(name + "/data")
+    var_m = fout.create_dataset(name + "/data", (var.len() * 2,), var.dtype)
+    var_m[:var.len()] = var[:]
+    var_m[var.len():] = var[:]
+    CopyGroup(fin, fout, name + "/vec_size")
+    CopyGroup(fin, fout, name + "/is_stat")
+    iset = fin.get(name + "/Interval Set")
+    iset_m = fout.create_dataset(name + "/Interval Set", (iset.len(),), iset.dtype)
+    iset_m[0] = iset[0]
+    iset_m[1] = iset[1] + (iset[1] - iset[0] + 1) # more robust with mixture
+
+
+def MirrorVector(fin, fout, name, plane):
+    var = fin.get(name + "/data")
+    var_m = fout.create_dataset(name + "/data", (var.len() * 2,), var.dtype)
+    var_m[:var.len()] = var[:]
+    if plane == "x":
+        var_m[var.len():] = [(-1.0 * v[0], v[1], v[2]) for v in var[:]]
+    elif plane == "y":
+        var_m[var.len():] = [(v[0], -1.0 * v[1], v[2]) for v in var[:]]
+    elif plane == "z":
+        var_m[var.len():] = [(v[0], v[1], -1.0 * v[2]) for v in var[:]]
+    else:
+        print("ERROR, plane direction", plane, "is not recognized!")
+    CopyGroup(fin, fout, name + "/vec_size")
+    CopyGroup(fin, fout, name + "/is_stat")
+    iset = fin.get(name + "/Interval Set")
+    iset_m = fout.create_dataset(name + "/Interval Set", (iset.len(),), iset.dtype)
+    iset_m[0] = iset[0]
+    iset_m[1] = iset[1] + var.len()
+
+
+def CopyGroup(fin, fout, name):
+    group_path = fin[name].parent.name
+    group_id = fout.require_group(group_path)
+    fin.copy(name, group_id)
+    
+
+def main():
+    # set up command line parsing
+
+    parser = argparse.ArgumentParser(
+        description="Mirror a put file from Loci/CHEM about the x, y, or z plane.")
+
+    parser.add_argument("-f", "--file", action="store", dest="fname",
+                        default="put.dat",
+                        help="Name of put file to mirror. (Default: put.dat)")
+    parser.add_argument("-p", "--plane", action="store", dest="plane",
+                        default="z", 
+                        help="Plane to mirror put file about. (Default: z)")
+    
+    args = parser.parse_args()
+
+
+    # Get command line inputs
+    fname = args.fname
+    plane = args.plane
+
+    tokens = fname.split(".", 1)
+    oname = tokens[0] + "_mirror." + tokens[1]
+
+    # Read file
+    data = h5py.File(fname, "r")
+
+    # write out data in hdf5 format
+    out = h5py.File(oname, "w")
+
+    # write out data that is unchanged
+    CopyGroup(data, out, "/Pambient")
+    CopyGroup(data, out, "/speciesNames")
+    CopyGroup(data, out, "/turbulence_model")
+
+    # Mirror scalar data (just copy)
+    MirrorScalar(data, out, "/k")
+    if ("/mixture" in data):
+        MirrorScalar(data, out, "/mixture")  # treat mass fractions like scalar
+    MirrorScalar(data, out, "/pg")
+    MirrorScalar(data, out, "/t")
+    MirrorScalar(data, out, "/tmuu")
+
+    # mirror vector data about plane
+    MirrorVector(data, out, "/pos", plane)
+    MirrorVector(data, out, "/u", plane)
+
+    # close files
+    data.close()
+    out.close()
+
+    print("Program Complete")
+
+
+if __name__ == "__main__":
+    main()
