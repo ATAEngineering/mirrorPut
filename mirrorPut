@@ -96,12 +96,14 @@ def main():
     CopyGroup(data, out, "/turbulence_model")
 
     # Mirror scalar data (just copy)
-    MirrorScalar(data, out, "/k")
+    if ("/k" in data):
+        MirrorScalar(data, out, "/k")
     if ("/mixture" in data):
         MirrorScalar(data, out, "/mixture")  # treat mass fractions like scalar
     MirrorScalar(data, out, "/pg")
     MirrorScalar(data, out, "/t")
-    MirrorScalar(data, out, "/tmuu")
+    if ("/tmuu" in data):
+        MirrorScalar(data, out, "/tmuu")
 
     # mirror vector data about plane
     MirrorVector(data, out, "/pos", plane)
