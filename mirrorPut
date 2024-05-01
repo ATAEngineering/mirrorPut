@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-# Copyright(C) 2019, ATA Engineering, Inc.
+# Copyright(C) 2019-2024, ATA Engineering, Inc.
 #
 # This program is free software you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
@@ -73,6 +73,8 @@ def main():
     parser.add_argument("-p", "--plane", action="store", dest="plane",
                         default="z", 
                         help="Plane to mirror put file about. (Default: z)")
+    parser.add_argument("-t", "--tne", action="store_true", dest="tne",
+                        help="Also mirror put_ev file. (Default: False)")
     
     args = parser.parse_args()
 
@@ -113,6 +115,27 @@ def main():
     data.close()
     out.close()
 
+    if args.tne:
+        evname = fname.replace(".", "_ev.", 1)
+        tokens = evname.split(".", 1)
+        oname = tokens[0] + "_mirror." + tokens[1]
+
+        # Read ev file
+        data = h5py.File(evname, "r")
+
+        # write out dat ain hdf5 format
+        out = h5py.File(oname, "w")
+
+        # mirror scalar data (just copy)
+        MirrorScalar(data, out, "/ev")
+
+        # mirror vector data about plane
+        MirrorVector(data, out, "/pos", plane)
+
+        #close files
+        data.close()
+        out.close()
+    
     print("Program Complete")
 
 
