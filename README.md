@@ -6,13 +6,19 @@ can be mirrored, and the resulting file can be used to initialize the full
 model. Currently the utility only supports mirroring about the x=0, y=0, or
 z=0 planes.
 
+Alternatively, the put file can be revolved about an axis, for initializing
+a quarter/half/full model from an axisymmetric model. The utility currently
+supports revolving about the x, y, or z axis only.
+
 # Dependencies
-This python utility requires the h5py and argparse libraries.
+This python utility requires the h5py, argparse, and numpy libraries.
 
 # Usage
 Detailed usage can be found by passing the script the **-h** or **--help** 
 options. The put file to mirror and the plane to mirror about can be specified 
-on the command line.
+on the command line. The `-r` or `--revolve` flag toggles revolving instead
+of mirroring, and then the axis of revolution, angle to revolve, and number of
+angular stations can be specified.
 
 ```
 mirrorPut -h
@@ -20,4 +26,5 @@ mirrorPut -h
 ```
 mirrorPut -f put.0_myCase -p z
 ```
-
+```
+mirrorPut -f put.0_myCase -r -a x -g 90 -r 16
