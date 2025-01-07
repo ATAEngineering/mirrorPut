@@ -17,10 +17,37 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 # This script mirrors a binary put file from Loci/CHEM about the x = 0, y = 0,
-# or z = 0 plane
+# or z = 0 plane, or alternatively, revolves the put file about the x, y, or
+# z-axis by a defined angle at a defined number of angular stations.
 
 import h5py
 import argparse
+import sys
+import numpy as np
+
+def get_rotation_matrix(axis, angle_deg):
+    angle_rad = np.radians(angle_deg)
+    if axis == 'x':
+        rotation_matrix = np.array([[1, 0, 0],
+                                    [0, np.cos(angle_rad), -np.sin(angle_rad)],
+                                    [0, np.sin(angle_rad), np.cos(angle_rad)]])
+    elif axis == 'y':
+        rotation_matrix = np.array([[np.cos(angle_rad), 0, np.sin(angle_rad)],
+                                    [0, 1, 0],
+                                    [-np.sin(angle_rad), 0, np.cos(angle_rad)]])
+    elif axis == 'z':
+        rotation_matrix = np.array([[np.cos(angle_rad), -np.sin(angle_rad), 0],
+                                    [np.sin(angle_rad), np.cos(angle_rad), 0],
+                                    [0, 0, 1]])
+    return rotation_matrix
+
+def rotate_vector(matrix, vector):
+    result = (
+        matrix[0][0] * vector[0] + matrix[0][1] * vector[1] + matrix[0][2] * vector[2],
+        matrix[1][0] * vector[0] + matrix[1][1] * vector[1] + matrix[1][2] * vector[2],
+        matrix[2][0] * vector[0] + matrix[2][1] * vector[1] + matrix[2][2] * vector[2],
+    )
+    return result
 
 def MirrorScalar(fin, fout, name):
     var = fin.get(name + "/data")
@@ -34,6 +61,19 @@ def MirrorScalar(fin, fout, name):
     iset_m[0] = iset[0]
     iset_m[1] = iset[1] + (iset[1] - iset[0] + 1) # more robust with mixture
 
+def RevolveScalar(fin, fout, name, angles):
+    n_angles = len(angles)
+    var = fin.get(name + "/data")
+    var_r = fout.create_dataset(name + "/data", (var.len() * n_angles,), var.dtype)
+    length = var.len()
+    for i in range(n_angles):
+        var_r[i*length : (i+1)*length] = var[:]
+    CopyGroup(fin, fout, name + "/vec_size")
+    CopyGroup(fin, fout, name + "/is_stat")
+    iset = fin.get(name + "/Interval Set")
+    iset_r = fout.create_dataset(name + "/Interval Set", (iset.len(),), iset.dtype)
+    iset_r[0] = iset[0]
+    iset_r[1] = iset[1] + (iset[1] - iset[0] + 1) * (n_angles-1)
 
 def MirrorVector(fin, fout, name, plane):
     var = fin.get(name + "/data")
@@ -54,37 +94,92 @@ def MirrorVector(fin, fout, name, plane):
     iset_m[0] = iset[0]
     iset_m[1] = iset[1] + var.len()
 
+def RevolveVector(fin, fout, name, angles, axis):
+    n_angles = len(angles)
+    var = fin.get(name + "/data")
+    var_r = fout.create_dataset(name + "/data", (var.len() * n_angles,), var.dtype)
+    length = var.len()
+    for i, angle in enumerate(angles):
+        rotation_matrix = get_rotation_matrix(axis, angle)
+        rotated_vectors = [rotate_vector(rotation_matrix, v) for v in var[:]]
+        var_r[i*length : (i+1)*length] = rotated_vectors
+    CopyGroup(fin, fout, name + "/vec_size")
+    CopyGroup(fin, fout, name + "/is_stat")
+    iset = fin.get(name + "/Interval Set")
+    iset_r = fout.create_dataset(name + "/Interval Set", (iset.len(),), iset.dtype)
+    iset_r[0] = iset[0]
+    iset_r[1] = iset[1] + length * (n_angles-1)
 
 def CopyGroup(fin, fout, name):
     group_path = fin[name].parent.name
     group_id = fout.require_group(group_path)
     fin.copy(name, group_id)
-    
 
 def main():
     # set up command line parsing
 
     parser = argparse.ArgumentParser(
-        description="Mirror a put file from Loci/CHEM about the x, y, or z plane.")
+        description="Mirror (or revolve) a put file from Loci/CHEM about the x, y, or z plane (or axis)")
 
     parser.add_argument("-f", "--file", action="store", dest="fname",
                         default="put.dat",
-                        help="Name of put file to mirror. (Default: put.dat)")
+                        help="Name of put file to mirror/revolve. (Default: put.dat)")
+    parser.add_argument("-r", "--revolve", action="store_true", dest="revolve",
+                        help="Revolve instead of mirror. (Default: False)")
     parser.add_argument("-p", "--plane", action="store", dest="plane",
                         default="z", 
                         help="Plane to mirror put file about. (Default: z)")
+    parser.add_argument("-a", "--axis", action="store", dest="axis",
+                        default="x", type=str,
+                        help="Axis to revolve put file about, only if -r specified. (Default: x)")
+    parser.add_argument("-g", "--angle", action="store", dest="angle",
+                        default=90, type=float,
+                        help="Angle (in deg.) to revolve put file, only if -r specified. (Default: 90)")
+    parser.add_argument("-n", "--number", action="store", dest="number",
+                        default=None, 
+                        help="Number of angular stations for revolved put file to contain, only if -r specified. (Default: 1 per degree)")
     parser.add_argument("-t", "--tne", action="store_true", dest="tne",
-                        help="Also mirror put_ev file. (Default: False)")
+                        help="Also mirror/revolve put_ev file. (Default: False)")
     
     args = parser.parse_args()
 
 
-    # Get command line inputs
+    # Get command line inputs for mirror option
     fname = args.fname
     plane = args.plane
 
+    # Get command line inputs for revolve option
+    revolve = args.revolve
+    axis  = args.axis.lower()
+    if axis not in ["x", "y", "z"]:
+        print('Axis must be one of x,y,z.')
+        sys.exit()
+    angle = args.angle
+    if args.number is None: # If not specified, use one station per degree
+        num = int(angle) + 1
+        defaultNum = True
+    else:
+        num = int(args.number)
+        defaultNum = False
+    if revolve:
+        if abs(angle - 360) <= 1e-6: # If revolution is 360 degrees, ignore 360 (same as 0)
+            if defaultNum: num = 360
+            angles = np.linspace(0, 360, num+1)
+            angles = angles[0:-1]
+        else:
+            angles = np.linspace(0, angle, num)
+        print('DEBUG:')
+        print(f'num: {num}, angle: {angle}')
+        print(angles)
+
+    # Print message showing which operation is being performed
+    if revolve:
+        print(f'Revolving {fname} about {axis}-axis with {num} total angular stations...')
+    else:
+        print(f'Mirroring {fname} about the {plane}-plane...')
+
     tokens = fname.split(".", 1)
-    oname = tokens[0] + "_mirror." + tokens[1]
+    oname = tokens[0] + ("_mirror." if not revolve else "_revolve.") + tokens[1]
 
     # Read file
     data = h5py.File(fname, "r")
@@ -97,19 +192,37 @@ def main():
     CopyGroup(data, out, "/speciesNames")
     CopyGroup(data, out, "/turbulence_model")
 
-    # Mirror scalar data (just copy)
-    if ("/k" in data):
-        MirrorScalar(data, out, "/k")
-    if ("/mixture" in data):
-        MirrorScalar(data, out, "/mixture")  # treat mass fractions like scalar
-    MirrorScalar(data, out, "/pg")
-    MirrorScalar(data, out, "/t")
-    if ("/tmuu" in data):
-        MirrorScalar(data, out, "/tmuu")
+    # Mirror data
+    if not revolve:
+        # scalar data is just copied
+        if ("/k" in data):
+            MirrorScalar(data, out, "/k")
+        if ("/mixture" in data):
+            MirrorScalar(data, out, "/mixture")  # treat mass fractions like scalar
+        MirrorScalar(data, out, "/pg")
+        MirrorScalar(data, out, "/t")
+        if ("/tmuu" in data):
+            MirrorScalar(data, out, "/tmuu")
 
-    # mirror vector data about plane
-    MirrorVector(data, out, "/pos", plane)
-    MirrorVector(data, out, "/u", plane)
+        # mirror vector data about plane
+        MirrorVector(data, out, "/pos", plane)
+        MirrorVector(data, out, "/u", plane)
+
+    # Revolve data
+    else:
+        # scalar data is just copied
+        if ("/k" in data):
+            RevolveScalar(data, out, "/k", angles)
+        if ("/mixture" in data):
+            RevolveScalar(data, out, "/mixture", angles)  # treat mass fractions like scalar
+        RevolveScalar(data, out, "/pg", angles)
+        RevolveScalar(data, out, "/t", angles)
+        if ("/tmuu" in data):
+            RevolveScalar(data, out, "/tmuu", angles)
+
+        # revolve vector data about axis
+        RevolveVector(data, out, "/pos", angles, axis)
+        RevolveVector(data, out, "/u", angles, axis)
 
     # close files
     data.close()
@@ -118,7 +231,7 @@ def main():
     if args.tne:
         evname = fname.replace(".", "_ev.", 1)
         tokens = evname.split(".", 1)
-        oname = tokens[0] + "_mirror." + tokens[1]
+        oname = tokens[0] + ("_mirror." if not revolve else "_revolve.") + tokens[1]
 
         # Read ev file
         data = h5py.File(evname, "r")
@@ -126,11 +239,17 @@ def main():
         # write out dat ain hdf5 format
         out = h5py.File(oname, "w")
 
-        # mirror scalar data (just copy)
-        MirrorScalar(data, out, "/ev")
+        # mirror/revolve scalar data (just copy)
+        if not revolve:
+            MirrorScalar(data, out, "/ev")
+        else:
+            RevolveScalar(data, out, "/ev", angles)
 
-        # mirror vector data about plane
-        MirrorVector(data, out, "/pos", plane)
+        # mirror/revolve vector data about plane
+        if not revolve:
+            MirrorVector(data, out, "/pos", plane)
+        else:
+            RevolveVector(data, out, "/pos", angles, axis)
 
         #close files
         data.close()
